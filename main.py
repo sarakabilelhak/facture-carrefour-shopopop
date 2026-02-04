@@ -18,9 +18,7 @@ def extraire_donnees_carrefour(pdf_path):
     infos = {'num_facture': 'NC', 'num_commande': 'NC', 'date_livraison': 'NC', 'magasin': 'CARREFOUR', 'adresse_magasin': 'Adresse non détectée'}
     adresse_shopopop = "SHOPOPOP\n1 ter mail Pablo picasso\n44000 Nantes"
     
-    # Ta logique de colonnes
     regex_colonnes = r"(\d+)\s+(\d+)\s+(\d+[.,]\d+)\s+(\d+[.,]\d+)\s+(\d+[.,]\d+)\s+(?:(\d+[.,]\d+)\s+)?(\d+[.,]\d+)"
-    # Mots qui stoppent l'extraction de l'adresse
     STOP_WORDS = ["LIVRAISON", "UNE QUESTION", "POUR TOUTES DEMANDES", "RUBRIQUE AIDE", "MERCI POUR VOTRE", "DATE DE", "N° DE", "ADRESSE DE"]
 
     with pdfplumber.open(pdf_path) as pdf:
@@ -29,35 +27,26 @@ def extraire_donnees_carrefour(pdf_path):
             t = page.extract_text() or ""
             texte_complet += t + "\n"
         
-        # Découpage propre en lignes
         lignes = [l.strip() for l in texte_complet.split('\n') if l.strip()]
 
-        # --- 1. EXTRACTION NOM & ADRESSE (Logique de position lignes 2 à 6) ---
+        # 1. Extraction Magasin & Adresse (Lignes 2 à 6)
         if len(lignes) > 1:
-            infos["magasin"] = lignes[1] # Ligne 2
-            
+            infos["magasin"] = lignes[1]
             addr_parts = []
-            # On regarde de la ligne 3 à 7 (index 2 à 6)
             for j in range(2, 7):
                 if j < len(lignes):
-                    l_up = lignes[j].upper()
-                    if any(stop in l_up for stop in STOP_WORDS):
-                        break
+                    if any(stop in lignes[j].upper() for stop in STOP_WORDS): break
                     addr_parts.append(lignes[j])
             infos["adresse_magasin"] = "\n".join(addr_parts)
 
-        # --- 2. EXTRACTION ARTICLES (Ta logique regex_colonnes) ---
+        # 2. Extraction Articles (Ta logique)
         for i, ligne in enumerate(lignes):
             match_ean = re.search(r"^(\d{13})", ligne)
             if match_ean:
                 m_n = re.search(regex_colonnes, ligne)
                 if m_n:
-                    # Utilisation de ton extraction par index
                     libelle = ligne[13:m_n.start()].strip()
-                    # Secours ligne précédente
-                    if not libelle and i > 0:
-                        libelle = lignes[i-1]
-                    
+                    if not libelle and i > 0: libelle = lignes[i-1]
                     articles.append({
                         'ean': match_ean.group(1),
                         'libelle': libelle if libelle else "Produit",
@@ -68,7 +57,7 @@ def extraire_donnees_carrefour(pdf_path):
                         'total_ttc': m_n.group(7).replace(',', '.')
                     })
 
-    # --- 3. MÉTADONNÉES ---
+    # Métadonnées
     m_f = re.search(r"N° de facture\s*[:\s]*([A-Z0-9]+)", texte_complet)
     if m_f: infos['num_facture'] = m_f.group(1)
     m_c = re.search(r"N° de commande\s*[:\s]*(\d+)", texte_complet)
@@ -86,6 +75,7 @@ def generer_pdf_depuis_selection(data_selection, infos_entree, adresse_dest, log
     elements = []
     styles = getSampleStyleSheet()
 
+    # En-tête (Logo + Infos)
     try:
         path_eff = os.path.join(os.path.dirname(__file__), logo_path)
         logo = Image(path_eff, width=5*cm, height=1.5*cm) if os.path.exists(path_eff) else Paragraph(f"<b>{infos_entree['magasin']}</b>", styles["Title"])
@@ -101,13 +91,41 @@ def generer_pdf_depuis_selection(data_selection, infos_entree, adresse_dest, log
     elements.append(Table([[col_g, col_d]], colWidths=[10*cm, 8.5*cm]))
     elements.append(Spacer(1, 0.8*cm))
 
+    # Tableau Articles
     data = [["EAN13", "Libellé", "Qté", "TVA", "P.U. HT", "P.U. TTC", "Total TTC"]]
+    grouped_taxes = {}
+    
     for art in data_selection:
         data.append([art['ean'], Paragraph(art['libelle'], styles["Normal"]), art['qte_rbt'], f"{art['tva']}%", f"{art['prix_ht']}€", f"{art['prix_ttc']}€", f"{art['total_ttc']}€"])
+        
+        # Calcul TVA pour le récap
+        tva_rate = float(art['tva'])
+        total_ttc_art = float(art['total_ttc'])
+        grouped_taxes[tva_rate] = grouped_taxes.get(tva_rate, 0) + total_ttc_art
     
     t = Table(data, colWidths=[3*cm, 6.5*cm, 1.2*cm, 1.3*cm, 2.2*cm, 2.3*cm, 2.5*cm])
     t.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),colors.grey), ('TEXTCOLOR',(0,0),(-1,0),colors.whitesmoke), ('GRID',(0,0),(-1,-1),0.5,colors.black), ('FONTSIZE',(0,0),(-1,-1),8), ('ALIGN',(0,0),(-1,-1),'CENTER'), ('VALIGN',(0,0),(-1,-1),'MIDDLE')]))
     elements.append(t)
+    elements.append(Spacer(1, 1*cm))
+
+    # --- TABLEAU RÉCAPITULATIF TVA ---
+    elements.append(Paragraph("<b>DÉTAIL DES TAXES</b>", styles["Normal"]))
+    tax_data = [["Taux", "Base HT", "TVA", "Total TTC"]]
+    tot_ht, tot_tva, tot_ttc = 0, 0, 0
+    
+    for rate in sorted(grouped_taxes.keys()):
+        ttc = grouped_taxes[rate]
+        ht = ttc / (1 + rate/100)
+        tva = ttc - ht
+        tot_ht += ht; tot_tva += tva; tot_ttc += ttc
+        tax_data.append([f"{rate}%", f"{ht:.2f}€", f"{tva:.2f}€", f"{ttc:.2f}€"])
+    
+    tax_data.append(["TOTAL", f"{tot_ht:.2f}€", f"{tot_tva:.2f}€", f"{tot_ttc:.2f}€"])
+    
+    t_tax = Table(tax_data, colWidths=[4*cm, 3*cm, 3*cm, 3*cm])
+    t_tax.setStyle(TableStyle([('GRID',(0,0),(-1,-1),0.5,colors.black), ('ALIGN',(0,0),(-1,-1),'RIGHT'), ('BACKGROUND',(0,0),(-1,0),colors.lightgrey), ('FONTSIZE',(0,0),(-1,-1),9), ('BOLD', (-1,-1), (-1,-1), True)]))
+    elements.append(t_tax)
+
     doc.build(elements)
     return output_path
 
@@ -151,8 +169,7 @@ def main():
                     sel_list = []
                     for _, row in selected.iterrows():
                         q = int(row['qte_livree'])
-                        # Calcul propre du total sélectionné
-                        p_ttc = float(str(row['prix_ttc']).replace('€',''))
+                        p_ttc = float(str(row['prix_ttc']).replace('€','').replace(',','.'))
                         sel_list.append({**row.to_dict(), 'qte_rbt': q, 'total_ttc': f"{q * p_ttc:.2f}"})
                     pdf = generer_pdf_depuis_selection(sel_list, infos, adresse, LOGO_PATH)
                     with open(pdf, "rb") as f:
