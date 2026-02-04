@@ -24,51 +24,51 @@ def extraire_donnees_carrefour(pdf_path):
             texte_complet += (page.extract_text() or "") + "\n"
         lines = [line.strip() for line in texte_complet.split('\n')]
 
-        # [cite_start]1. Magasin & Adresse (Extraction pour formats comme City Lormont) [cite: 2, 3, 4]
+        # 1. Magasin & Adresse
         for i, line in enumerate(lines[:20]):
             l_up = line.upper()
-            [cite_start]if any(x in l_up for x in ["CARREFOUR", "CITY", "MARKET"]): [cite: 1, 2, 29]
+            if any(x in l_up for x in ["CARREFOUR", "CITY", "MARKET"]):
                 if "SERVICE" not in l_up and "FACTURE" not in l_up:
-                    [cite_start]infos["magasin"] = line [cite: 2, 29]
+                    infos["magasin"] = line
                     addr_candidate = []
                     for j in range(i + 1, i + 4):
                         if j < len(lines) and re.search(r'\d{5}', lines[j]): 
-                            [cite_start]addr_candidate.append(lines[j]) [cite: 4, 31, 53]
+                            addr_candidate.append(lines[j])
                     if addr_candidate:
-                        [cite_start]infos["adresse_magasin"] = ", ".join(addr_candidate) [cite: 3, 4, 30, 31]
+                        infos["adresse_magasin"] = ", ".join(addr_candidate)
                     break
         
         if infos["adresse_magasin"] == "Adresse non détectée":
             motif_addr = re.search(r"(\d+[\s,]+(?:RUE|AV|BD|PL|ROUTE|RTE|CH).*?\d{5}.*?)(?:\n|$|RCS)", texte_complet, re.IGNORECASE | re.DOTALL)
             if motif_addr:
-                [cite_start]infos["adresse_magasin"] = motif_addr.group(1).replace('\n', ' ').strip() [cite: 26, 48, 70]
+                infos["adresse_magasin"] = motif_addr.group(1).replace('\n', ' ').strip()
 
-        # [cite_start]2. Métadonnées [cite: 9, 10, 36, 37]
+        # 2. Métadonnées
         m_f = re.search(r"N° de facture\s*[:\s]*([A-Z0-9]+)", texte_complet)
-        [cite_start]if m_f: infos['num_facture'] = m_f.group(1) [cite: 10, 37, 59]
+        if m_f: infos['num_facture'] = m_f.group(1)
         m_c = re.search(r"N° de commande\s*[:\s]*(\d+)", texte_complet)
-        [cite_start]if m_c: infos['num_commande'] = m_c.group(1) [cite: 10, 37, 59]
+        if m_c: infos['num_commande'] = m_c.group(1)
         m_d = re.search(r"Date de livraison\s*[:\s]*([\d/]+)", texte_complet)
-        [cite_start]if m_d: infos['date_livraison'] = m_d.group(1) [cite: 9, 36, 58]
+        if m_d: infos['date_livraison'] = m_d.group(1)
 
-        # [cite_start]3. Articles (Filtrage montant > 0) [cite: 18, 20, 40]
+        # 3. Articles
         for i, ligne in enumerate(lines):
             match_ean = re.search(r"^(\d{13})", ligne)
             if match_ean:
                 montants = re.findall(r"\d+[.,]\d+", ligne)
                 if len(montants) >= 3:
                     total_ttc = float(montants[-1].replace(',', '.'))
-                    [cite_start]if total_ttc > 0: [cite: 20, 40, 65]
+                    if total_ttc > 0:
                         libelle = ligne[13:].split(montants[0])[0].strip()
                         if not libelle and i > 0: libelle = lines[i-1]
                         articles.append({
-                            [cite_start]'ean': match_ean.group(1), [cite: 20, 40]
-                            [cite_start]'libelle': libelle if libelle else "Produit", [cite: 20, 40]
-                            [cite_start]'qte_livree': int(re.search(r"\s(\d+)\s", ligne).group(1)) if re.search(r"\s(\d+)\s", ligne) else 1, [cite: 20, 40]
-                            [cite_start]'tva': montants[-5] if len(montants)>=5 else "5.5", [cite: 20, 40]
-                            [cite_start]'prix_ht': montants[-4] if len(montants)>=4 else montants[-3], [cite: 20, 40]
-                            [cite_start]'prix_ttc': montants[-2] if len(montants)>=3 else montants[-1], [cite: 20, 40]
-                            [cite_start]'total_ttc': total_ttc [cite: 20, 40]
+                            'ean': match_ean.group(1),
+                            'libelle': libelle if libelle else "Produit",
+                            'qte_livree': int(re.search(r"\s(\d+)\s", ligne).group(1)) if re.search(r"\s(\d+)\s", ligne) else 1,
+                            'tva': montants[-5] if len(montants)>=5 else "5.5",
+                            'prix_ht': montants[-4] if len(montants)>=4 else montants[-3],
+                            'prix_ttc': montants[-2] if len(montants)>=3 else montants[-1],
+                            'total_ttc': total_ttc
                         })
     
     return pd.DataFrame(articles).drop_duplicates(), infos, adresse_shopopop
