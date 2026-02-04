@@ -20,50 +20,55 @@ def extraire_donnees_carrefour(pdf_path):
     
     # Ta logique de colonnes
     regex_colonnes = r"(\d+)\s+(\d+)\s+(\d+[.,]\d+)\s+(\d+[.,]\d+)\s+(\d+[.,]\d+)\s+(?:(\d+[.,]\d+)\s+)?(\d+[.,]\d+)"
-    STOP_WORDS = ["LIVRAISON", "UNE QUESTION", "POUR TOUTES DEMANDES", "RUBRIQUE AIDE", "MERCI POUR VOTRE", "DATE DE", "N° DE"]
+    # Mots qui stoppent l'extraction de l'adresse
+    STOP_WORDS = ["LIVRAISON", "UNE QUESTION", "POUR TOUTES DEMANDES", "RUBRIQUE AIDE", "MERCI POUR VOTRE", "DATE DE", "N° DE", "ADRESSE DE"]
 
     with pdfplumber.open(pdf_path) as pdf:
         texte_complet = ""
         for page in pdf.pages:
             t = page.extract_text() or ""
             texte_complet += t + "\n"
-            lignes = [l.strip() for l in t.split('\n') if l.strip()]
+        
+        # Découpage propre en lignes
+        lignes = [l.strip() for l in texte_complet.split('\n') if l.strip()]
+
+        # --- 1. EXTRACTION NOM & ADRESSE (Logique de position lignes 2 à 6) ---
+        if len(lignes) > 1:
+            infos["magasin"] = lignes[1] # Ligne 2
             
-            # --- Extraction Nom & Adresse (Lignes 2 à 6) ---
-            if not articles: # On ne le fait qu'une fois au début
-                for i, line in enumerate(lignes[:15]):
-                    if any(x in line.upper() for x in ["CARREFOUR", "CITY", "MARKET"]):
-                        infos["magasin"] = line
-                        addr_parts = []
-                        for j in range(i + 1, i + 5):
-                            if j < len(lignes):
-                                if any(stop in lignes[j].upper() for stop in STOP_WORDS): break
-                                addr_parts.append(lignes[j])
-                        infos["adresse_magasin"] = "\n".join(addr_parts)
+            addr_parts = []
+            # On regarde de la ligne 3 à 7 (index 2 à 6)
+            for j in range(2, 7):
+                if j < len(lignes):
+                    l_up = lignes[j].upper()
+                    if any(stop in l_up for stop in STOP_WORDS):
                         break
+                    addr_parts.append(lignes[j])
+            infos["adresse_magasin"] = "\n".join(addr_parts)
 
-            # --- Extraction Articles avec TA LOGIQUE ---
-            for i, ligne in enumerate(lignes):
-                match_ean = re.search(r"^(\d{13})", ligne)
-                if match_ean:
-                    m_n = re.search(regex_colonnes, ligne)
-                    if m_n:
-                        # Libellé entre l'EAN et le début des colonnes chiffres
-                        libelle = ligne[13:m_n.start()].strip()
-                        # Secours ligne précédente si vide
-                        if not libelle and i > 0: libelle = lignes[i-1]
-                        
-                        articles.append({
-                            'ean': match_ean.group(1),
-                            'libelle': libelle if libelle else "Produit",
-                            'qte_livree': int(m_n.group(2)),
-                            'tva': m_n.group(3).replace(',', '.'),
-                            'prix_ht': m_n.group(4).replace(',', '.'),
-                            'prix_ttc': m_n.group(5).replace(',', '.'),
-                            'total_ttc': m_n.group(7).replace(',', '.')
-                        })
+        # --- 2. EXTRACTION ARTICLES (Ta logique regex_colonnes) ---
+        for i, ligne in enumerate(lignes):
+            match_ean = re.search(r"^(\d{13})", ligne)
+            if match_ean:
+                m_n = re.search(regex_colonnes, ligne)
+                if m_n:
+                    # Utilisation de ton extraction par index
+                    libelle = ligne[13:m_n.start()].strip()
+                    # Secours ligne précédente
+                    if not libelle and i > 0:
+                        libelle = lignes[i-1]
+                    
+                    articles.append({
+                        'ean': match_ean.group(1),
+                        'libelle': libelle if libelle else "Produit",
+                        'qte_livree': int(m_n.group(2)),
+                        'tva': m_n.group(3).replace(',', '.'),
+                        'prix_ht': m_n.group(4).replace(',', '.'),
+                        'prix_ttc': m_n.group(5).replace(',', '.'),
+                        'total_ttc': m_n.group(7).replace(',', '.')
+                    })
 
-    # Métadonnées
+    # --- 3. MÉTADONNÉES ---
     m_f = re.search(r"N° de facture\s*[:\s]*([A-Z0-9]+)", texte_complet)
     if m_f: infos['num_facture'] = m_f.group(1)
     m_c = re.search(r"N° de commande\s*[:\s]*(\d+)", texte_complet)
@@ -146,7 +151,9 @@ def main():
                     sel_list = []
                     for _, row in selected.iterrows():
                         q = int(row['qte_livree'])
-                        sel_list.append({**row.to_dict(), 'qte_rbt': q, 'total_ttc': f"{q * float(str(row['prix_ttc']).replace('€','')): .2f}"})
+                        # Calcul propre du total sélectionné
+                        p_ttc = float(str(row['prix_ttc']).replace('€',''))
+                        sel_list.append({**row.to_dict(), 'qte_rbt': q, 'total_ttc': f"{q * p_ttc:.2f}"})
                     pdf = generer_pdf_depuis_selection(sel_list, infos, adresse, LOGO_PATH)
                     with open(pdf, "rb") as f:
                         st.download_button("📥 Télécharger", f, file_name=os.path.basename(pdf))
