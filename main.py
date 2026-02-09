@@ -29,7 +29,6 @@ def extraire_donnees_carrefour(pdf_path):
         
         lignes = [l.strip() for l in texte_complet.split('\n') if l.strip()]
 
-        # 1. Extraction Magasin & Adresse (Lignes 2 à 6)
         if len(lignes) > 1:
             infos["magasin"] = lignes[1]
             addr_parts = []
@@ -39,7 +38,6 @@ def extraire_donnees_carrefour(pdf_path):
                     addr_parts.append(lignes[j])
             infos["adresse_magasin"] = "\n".join(addr_parts)
 
-        # 2. Extraction Articles (Ta logique)
         for i, ligne in enumerate(lignes):
             match_ean = re.search(r"^(\d{13})", ligne)
             if match_ean:
@@ -57,7 +55,6 @@ def extraire_donnees_carrefour(pdf_path):
                         'total_ttc': m_n.group(7).replace(',', '.')
                     })
 
-    # Métadonnées
     m_f = re.search(r"N° de facture\s*[:\s]*([A-Z0-9]+)", texte_complet)
     if m_f: infos['num_facture'] = m_f.group(1)
     m_c = re.search(r"N° de commande\s*[:\s]*(\d+)", texte_complet)
@@ -75,7 +72,6 @@ def generer_pdf_depuis_selection(data_selection, infos_entree, adresse_dest, log
     elements = []
     styles = getSampleStyleSheet()
 
-    # En-tête (Logo + Infos)
     try:
         path_eff = os.path.join(os.path.dirname(__file__), logo_path)
         logo = Image(path_eff, width=5*cm, height=1.5*cm) if os.path.exists(path_eff) else Paragraph(f"<b>{infos_entree['magasin']}</b>", styles["Title"])
@@ -91,14 +87,11 @@ def generer_pdf_depuis_selection(data_selection, infos_entree, adresse_dest, log
     elements.append(Table([[col_g, col_d]], colWidths=[10*cm, 8.5*cm]))
     elements.append(Spacer(1, 0.8*cm))
 
-    # Tableau Articles
     data = [["EAN13", "Libellé", "Qté", "TVA", "P.U. HT", "P.U. TTC", "Total TTC"]]
     grouped_taxes = {}
     
     for art in data_selection:
         data.append([art['ean'], Paragraph(art['libelle'], styles["Normal"]), art['qte_rbt'], f"{art['tva']}%", f"{art['prix_ht']}€", f"{art['prix_ttc']}€", f"{art['total_ttc']}€"])
-        
-        # Calcul TVA pour le récap
         tva_rate = float(art['tva'])
         total_ttc_art = float(art['total_ttc'])
         grouped_taxes[tva_rate] = grouped_taxes.get(tva_rate, 0) + total_ttc_art
@@ -108,7 +101,6 @@ def generer_pdf_depuis_selection(data_selection, infos_entree, adresse_dest, log
     elements.append(t)
     elements.append(Spacer(1, 1*cm))
 
-    # --- TABLEAU RÉCAPITULATIF TVA ---
     elements.append(Paragraph("<b>DÉTAIL DES TAXES</b>", styles["Normal"]))
     tax_data = [["Taux", "Base HT", "TVA", "Total TTC"]]
     tot_ht, tot_tva, tot_ttc = 0, 0, 0
@@ -121,7 +113,6 @@ def generer_pdf_depuis_selection(data_selection, infos_entree, adresse_dest, log
         tax_data.append([f"{rate}%", f"{ht:.2f}€", f"{tva:.2f}€", f"{ttc:.2f}€"])
     
     tax_data.append(["TOTAL", f"{tot_ht:.2f}€", f"{tot_tva:.2f}€", f"{tot_ttc:.2f}€"])
-    
     t_tax = Table(tax_data, colWidths=[4*cm, 3*cm, 3*cm, 3*cm])
     t_tax.setStyle(TableStyle([('GRID',(0,0),(-1,-1),0.5,colors.black), ('ALIGN',(0,0),(-1,-1),'RIGHT'), ('BACKGROUND',(0,0),(-1,0),colors.lightgrey), ('FONTSIZE',(0,0),(-1,-1),9), ('BOLD', (-1,-1), (-1,-1), True)]))
     elements.append(t_tax)
@@ -132,6 +123,10 @@ def generer_pdf_depuis_selection(data_selection, infos_entree, adresse_dest, log
 def main():
     st.set_page_config(page_title="Carrefour x SHOPOPOP", layout="wide")
     st.title("📄 Réédition de Factures Carrefour x SHOPOPOP")
+
+    # --- INITIALISATION DU PANIER PERSISTANT ---
+    if 'panier' not in st.session_state:
+        st.session_state.panier = set()
 
     uploaded_file = st.file_uploader("Importer le PDF Carrefour", type=["pdf"])
 
@@ -150,30 +145,70 @@ def main():
             
             st.divider()
 
-            recherche = st.text_input("🔍 Rechercher un article (nom ou EAN)", "")
+            # --- ZONE DE RECHERCHE ---
+            col_search, col_count = st.columns([3, 1])
+            with col_search:
+                recherche = st.text_input("🔍 Rechercher un article (nom ou EAN)", "")
+            with col_count:
+                st.metric("Articles sélectionnés", len(st.session_state.panier))
+
             mask = df_art['libelle'].str.contains(recherche, case=False) | df_art['ean'].str.contains(recherche)
             df_filtre = df_art[mask].copy()
 
+            # --- LOGIQUE TOUT SELECTIONNER ---
             if 'sel_all' not in st.session_state: st.session_state.sel_all = False
-            def cb(): st.session_state.sel_all = not st.session_state.sel_all
-            st.button("✅ Tout Sélectionner / Désélectionner", on_click=cb)
+            def toggle_all():
+                if not st.session_state.sel_all:
+                    # On ajoute tous les EAN du PDF au panier
+                    st.session_state.panier.update(df_art['ean'].tolist())
+                else:
+                    # On vide le panier
+                    st.session_state.panier.clear()
+                st.session_state.sel_all = not st.session_state.sel_all
 
-            df_filtre.insert(0, "Selection", st.session_state.sel_all)
+            st.button("✅ Tout Sélectionner / Désélectionner", on_click=toggle_all)
 
-            edited_df = st.data_editor(df_filtre, column_config={"Selection": st.column_config.CheckboxColumn("Sel."), "qte_livree": st.column_config.NumberColumn("Qté", min_value=1)}, hide_index=True, width="stretch")
+            # --- AFFICHAGE DU TABLEAU ---
+            # On définit la colonne 'Selection' en fonction du panier actuel
+            df_filtre.insert(0, "Selection", df_filtre['ean'].apply(lambda x: x in st.session_state.panier))
 
+            edited_df = st.data_editor(
+                df_filtre, 
+                column_config={
+                    "Selection": st.column_config.CheckboxColumn("Sel."), 
+                    "qte_livree": st.column_config.NumberColumn("Qté", min_value=1)
+                }, 
+                hide_index=True, 
+                width="stretch",
+                key="editor" # Clé fixe pour éviter les rechargements inutiles
+            )
+
+            # --- MISE À JOUR DU PANIER APRÈS ÉDITION ---
+            # On synchronise le panier avec les changements faits dans la vue actuelle
+            for _, row in edited_df.iterrows():
+                ean = row['ean']
+                if row['Selection']:
+                    st.session_state.panier.add(ean)
+                else:
+                    st.session_state.panier.discard(ean)
+
+            # --- GÉNÉRATION DU PDF ---
             if st.button("🚀 Générer la facture SHOPOPOP", type="primary"):
-                selected = edited_df[edited_df["Selection"] == True]
-                if selected.empty: st.warning("Sélectionnez au moins un article.")
+                # On filtre le dataframe original avec TOUT ce qui est dans le panier
+                selected = df_art[df_art['ean'].isin(st.session_state.panier)]
+                
+                if selected.empty: 
+                    st.warning("Sélectionnez au moins un article.")
                 else:
                     sel_list = []
                     for _, row in selected.iterrows():
                         q = int(row['qte_livree'])
                         p_ttc = float(str(row['prix_ttc']).replace('€','').replace(',','.'))
                         sel_list.append({**row.to_dict(), 'qte_rbt': q, 'total_ttc': f"{q * p_ttc:.2f}"})
+                    
                     pdf = generer_pdf_depuis_selection(sel_list, infos, adresse, LOGO_PATH)
                     with open(pdf, "rb") as f:
-                        st.download_button("📥 Télécharger", f, file_name=os.path.basename(pdf))
+                        st.download_button("📥 Télécharger la facture", f, file_name=os.path.basename(pdf))
         
         if os.path.exists(path): os.remove(path)
 
