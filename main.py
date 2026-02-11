@@ -124,7 +124,6 @@ def main():
     st.set_page_config(page_title="Carrefour x SHOPOPOP", layout="wide")
     st.title("📄 Réédition de Factures Carrefour x SHOPOPOP")
 
-    # --- INITIALISATION DU PANIER PERSISTANT ---
     if 'panier' not in st.session_state:
         st.session_state.panier = set()
 
@@ -145,7 +144,6 @@ def main():
             
             st.divider()
 
-            # --- ZONE DE RECHERCHE ---
             col_search, col_count = st.columns([3, 1])
             with col_search:
                 recherche = st.text_input("🔍 Rechercher un article (nom ou EAN)", "")
@@ -155,21 +153,16 @@ def main():
             mask = df_art['libelle'].str.contains(recherche, case=False) | df_art['ean'].str.contains(recherche)
             df_filtre = df_art[mask].copy()
 
-            # --- LOGIQUE TOUT SELECTIONNER ---
             if 'sel_all' not in st.session_state: st.session_state.sel_all = False
             def toggle_all():
                 if not st.session_state.sel_all:
-                    # On ajoute tous les EAN du PDF au panier
                     st.session_state.panier.update(df_art['ean'].tolist())
                 else:
-                    # On vide le panier
                     st.session_state.panier.clear()
                 st.session_state.sel_all = not st.session_state.sel_all
 
             st.button("✅ Tout Sélectionner / Désélectionner", on_click=toggle_all)
 
-            # --- AFFICHAGE DU TABLEAU ---
-            # On définit la colonne 'Selection' en fonction du panier actuel
             df_filtre.insert(0, "Selection", df_filtre['ean'].apply(lambda x: x in st.session_state.panier))
 
             edited_df = st.data_editor(
@@ -180,11 +173,10 @@ def main():
                 }, 
                 hide_index=True, 
                 width="stretch",
-                key="editor" # Clé fixe pour éviter les rechargements inutiles
+                key="editor"
             )
 
-            # --- MISE À JOUR DU PANIER APRÈS ÉDITION ---
-            # On synchronise le panier avec les changements faits dans la vue actuelle
+            # Synchronisation du panier
             for _, row in edited_df.iterrows():
                 ean = row['ean']
                 if row['Selection']:
@@ -192,9 +184,34 @@ def main():
                 else:
                     st.session_state.panier.discard(ean)
 
-            # --- GÉNÉRATION DU PDF ---
+            # --- CALCUL DU RÉCAPITULATIF EN TEMPS RÉEL ---
+            selected_items = df_art[df_art['ean'].isin(st.session_state.panier)]
+            
+            total_ttc_global = 0.0
+            total_ht_global = 0.0
+            
+            for _, row in selected_items.iterrows():
+                # On récupère la quantité modifiée depuis l'éditeur si possible, sinon celle du DF original
+                qte = float(row['qte_livree'])
+                ttc_u = float(str(row['prix_ttc']).replace(',', '.'))
+                tva_taux = float(str(row['tva']).replace(',', '.'))
+                
+                total_ttc_global += qte * ttc_u
+                total_ht_global += (qte * ttc_u) / (1 + tva_taux / 100)
+
+            total_tva_global = total_ttc_global - total_ht_global
+
+            st.markdown("### 💰 Récapitulatif du remboursement")
+            # Design en colonnes pour le récap
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Total HT", f"{total_ht_global:.2f} €")
+            m2.metric("TVA", f"{total_tva_global:.2f} €")
+            m3.subheader(f"Total TTC : {total_ttc_global:.2f} €")
+            
+            st.divider()
+
+            # --- GÉNÉRATION ---
             if st.button("🚀 Générer la facture SHOPOPOP", type="primary"):
-                # On filtre le dataframe original avec TOUT ce qui est dans le panier
                 selected = df_art[df_art['ean'].isin(st.session_state.panier)]
                 
                 if selected.empty: 
@@ -203,7 +220,7 @@ def main():
                     sel_list = []
                     for _, row in selected.iterrows():
                         q = int(row['qte_livree'])
-                        p_ttc = float(str(row['prix_ttc']).replace('€','').replace(',','.'))
+                        p_ttc = float(str(row['prix_ttc']).replace(',','.'))
                         sel_list.append({**row.to_dict(), 'qte_rbt': q, 'total_ttc': f"{q * p_ttc:.2f}"})
                     
                     pdf = generer_pdf_depuis_selection(sel_list, infos, adresse, LOGO_PATH)
