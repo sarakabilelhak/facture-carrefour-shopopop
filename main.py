@@ -176,7 +176,7 @@ def main():
                 key="editor"
             )
 
-            # Synchronisation du panier
+            # Mise à jour du panier
             for _, row in edited_df.iterrows():
                 ean = row['ean']
                 if row['Selection']:
@@ -184,33 +184,20 @@ def main():
                 else:
                     st.session_state.panier.discard(ean)
 
-            # --- CALCUL DU RÉCAPITULATIF EN TEMPS RÉEL ---
+            # --- CALCUL DU MONTANT TTC À REMBOURSER ---
             selected_items = df_art[df_art['ean'].isin(st.session_state.panier)]
-            
             total_ttc_global = 0.0
-            total_ht_global = 0.0
-            
             for _, row in selected_items.iterrows():
-                # On récupère la quantité modifiée depuis l'éditeur si possible, sinon celle du DF original
                 qte = float(row['qte_livree'])
                 ttc_u = float(str(row['prix_ttc']).replace(',', '.'))
-                tva_taux = float(str(row['tva']).replace(',', '.'))
-                
                 total_ttc_global += qte * ttc_u
-                total_ht_global += (qte * ttc_u) / (1 + tva_taux / 100)
 
-            total_tva_global = total_ttc_global - total_ht_global
-
-            st.markdown("### 💰 Récapitulatif du remboursement")
-            # Design en colonnes pour le récap
-            m1, m2, m3 = st.columns(3)
-            m1.metric("Total HT", f"{total_ht_global:.2f} €")
-            m2.metric("TVA", f"{total_tva_global:.2f} €")
-            m3.subheader(f"Total TTC : {total_ttc_global:.2f} €")
-            
+            # --- AFFICHAGE DU MONTANT UNIQUE ---
+            st.divider()
+            st.metric(label="MONTANT TOTAL TTC À REMBOURSER", value=f"{total_ttc_global:.2f} €")
             st.divider()
 
-            # --- GÉNÉRATION ---
+            # --- BOUTON DE GÉNÉRATION ---
             if st.button("🚀 Générer la facture SHOPOPOP", type="primary"):
                 selected = df_art[df_art['ean'].isin(st.session_state.panier)]
                 
